@@ -6,7 +6,7 @@ import supervision as sv
 
 class BallTracker:
     def __init__(self, buffer_size=64):
-        self.pts = deque(maxlen=buffer_size)
+        self.buffer = deque(maxlen=buffer_size)
 
     def update(self, detections):
         xy = detections.get_anchors_coordinates(sv.Position.CENTER)

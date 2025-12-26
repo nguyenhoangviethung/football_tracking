@@ -27,7 +27,7 @@ class BallAnnotator:
         self.radius = radius
         self.thinkness = thinkness
 
-    def interpolate(self, i, max_i):
+    def interpolate_radius(self, i, max_i):
         if max_i == 1:
             return self.radius
         return int(1 + i * (self.radius - 1) / (max_i - 1))

@@ -21,12 +21,11 @@ class BallTracker:
         return detections[[index]]
 
 class BallAnnotator:
-    def __init__(self, radius, buffer_size=64, thinkness=2):
+    def __init__(self, radius, buffer_size=64, thickness=2):
         self.color_palette = sv.ColorPalette.from_matplotlib('tab10',buffer_size)
         self.buffer = deque(maxlen=buffer_size)
         self.radius = radius
-        self.thinkness = thinkness
-
+        self.thickness = thickness
     def interpolate_radius(self, i, max_i):
         if max_i == 1:
             return self.radius

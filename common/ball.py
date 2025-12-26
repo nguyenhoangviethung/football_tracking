@@ -22,7 +22,7 @@ class BallTracker:
 
 class BallAnnotator:
     def __init__(self, radius, buffer_size=64, thinkness=2):
-        self.color_pallete = sv.ColorPalette.from_matplotlib('tab10',buffer_size)
+        self.color_palette = sv.ColorPalette.from_matplotlib('tab10',buffer_size)
         self.buffer = deque(maxlen=buffer_size)
         self.radius = radius
         self.thinkness = thinkness

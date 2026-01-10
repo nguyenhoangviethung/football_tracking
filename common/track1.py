@@ -42,7 +42,7 @@ class FootballTracker:
         self.gk_box_annotator = sv.BoxAnnotator(color=self.team_colors, thickness=2)
         
         # Thay thế TriangleAnnotator bằng BallAnnotator xịn sò hơn
-        self.ball_annotator = BallAnnotator(radius=6, buffer_size=10, thickness=2)
+        self.ball_annotator = BallAnnotator(radius=12, buffer_size=10, thickness=2)
         # Giữ lại Triangle để đánh dấu vị trí hiện tại cho rõ
         self.ball_marker = sv.TriangleAnnotator(color=sv.Color.WHITE, base=15, height=12)
 

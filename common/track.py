@@ -1,90 +1,137 @@
-from tqdm import tqdm
 import numpy as np
 import supervision as sv
+from tqdm import tqdm
 
-from common.player import SmartPlayerTracker
+class FootballTracker:
+    def __init__(self, team_classifier, player_model, ball_model, 
+                 player_id=2, gk_id=1, ball_id=0,
+                 reclassify_interval=30, kit_timeout=60):
+ 
+        self.team_classifier = team_classifier
+        self.player_model = player_model
+        self.ball_model = ball_model
+        
+        # ID cấu hình
+        self.PLAYER_ID = player_id
+        self.GOALKEEPER_ID = gk_id
+        self.BALL_ID = ball_id
+        
+        # Logic cấu hình
+        self.reclassify_interval = reclassify_interval
+        self.kit_timeout = kit_timeout
+        
+        # Trackers
+        self.global_tracker = sv.ByteTrack(track_activation_threshold=0.25, lost_track_buffer=30)
+        self.ball_tracker = sv.ByteTrack(track_activation_threshold=0.1, lost_track_buffer=10)
+        
+        # Bộ nhớ (Caches)
+        self.team_cache = {}
+        self.kit_number_cache = {}
+        self.last_seen_cache = {}
+        
+        # Annotators
+        self.team_colors = sv.ColorPalette.from_hex(['#FFD700', '#00BFFF'])
+        self.player_annotator = sv.EllipseAnnotator(color=self.team_colors, thickness=2)
+        self.player_label_annotator = sv.LabelAnnotator(
+            color=self.team_colors, text_color=sv.Color.BLACK, text_position=sv.Position.BOTTOM_CENTER
+        )
+        self.gk_box_annotator = sv.BoxAnnotator(color=self.team_colors, thickness=2)
+        self.ball_annotator = sv.TriangleAnnotator(color=sv.Color.WHITE, base=20, height=17)
 
-# Trackers
-player_tracker = SmartPlayerTracker(max_id=20, max_distance=150)
-gk_tracker = sv.ByteTrack(track_activation_threshold=0.2, lost_track_buffer=30)
-ball_tracker = sv.ByteTrack(track_activation_threshold=0.1, lost_track_buffer=10) # Track bóng để mượt hơn
+    def _assign_kit_number(self, tracker_id, team_id, current_frame_idx):
+        self.last_seen_cache[tracker_id] = current_frame_idx
+        
+        if tracker_id in self.kit_number_cache:
+            return self.kit_number_cache[tracker_id]
 
-# Annotators
-colors = sv.ColorPalette.from_hex(['#FF8C00', '#00BFFF', '#FF1493', '#FFD700'])
-ellipse_annotator = sv.EllipseAnnotator(color=colors, thickness=2)
-label_annotator = sv.LabelAnnotator(color=colors, text_color=sv.Color.BLACK, text_position=sv.Position.BOTTOM_CENTER)
-gk_box_annotator = sv.BoxAnnotator(color=sv.Color.RED, thickness=2)
-gk_label_annotator = sv.LabelAnnotator(color=sv.Color.RED, text_color=sv.Color.WHITE)
-ref_box_annotator = sv.BoxAnnotator(color=sv.Color.BLACK, thickness=2)
-triangle_annotator = sv.TriangleAnnotator(color=sv.Color.from_hex('#FFD700'), base=25, height=21, outline_thickness=1)
+        taken_numbers = set()
+        for tid in list(self.kit_number_cache.keys()):
+            if current_frame_idx - self.last_seen_cache.get(tid, 0) > self.kit_timeout:
+                del self.kit_number_cache[tid]
+                continue
+            
+            if self.team_cache.get(tid) == team_id:
+                taken_numbers.add(self.kit_number_cache[tid])
 
-# ==========================================
-# 3. VÒNG LẶP XỬ LÝ VIDEO
-# ==========================================
-video_info = sv.VideoInfo.from_video_path(SOURCE_VIDEO_PATH)
-TARGET_VIDEO_PATH = "/content/output_tracked_final.mp4"
-frame_generator = sv.get_video_frames_generator(SOURCE_VIDEO_PATH)
+        for num in range(1, 11):
+            if num not in taken_numbers:
+                self.kit_number_cache[tracker_id] = num
+                return num
+        
+        return (tracker_id - 1) % 10 + 1
 
-print(f"Processing video: {SOURCE_VIDEO_PATH} -> {TARGET_VIDEO_PATH}")
+    def process_video(self, source_path, target_path):
+        video_info = sv.VideoInfo.from_video_path(source_path)
+        frame_generator = sv.get_video_frames_generator(source_path)
 
-with sv.VideoSink(TARGET_VIDEO_PATH, video_info=video_info) as sink:
-    # Dùng tqdm để hiện thanh tiến trình
-    for frame in tqdm(frame_generator, total=video_info.total_frames):
+        with sv.VideoSink(target_path, video_info=video_info) as sink:
+            for idx, frame in enumerate(tqdm(frame_generator, total=video_info.total_frames)):
+                # A. Detection & Tracking
+                p_res = self.player_model.infer(frame, confidence=0.3)[0]
+                detections = sv.Detections.from_inference(p_res)
+                mask = np.isin(detections.class_id, [self.PLAYER_ID, self.GOALKEEPER_ID])
+                detections = detections[mask]
+                
+                tracked = self.global_tracker.update_with_detections(detections)
 
-        # --- A. INFERENCE ---
-        # 1. Detect Người (Player Model)
-        p_result = PLAYER_DETECTION_MODEL.infer(frame, confidence=0.3)[0]
-        all_detections = sv.Detections.from_inference(p_result)
+                # B. Team Classification (Self-Correction logic)
+                should_reclassify = (idx % self.reclassify_interval == 0)
+                unknown_crops, unknown_idxs = [], []
 
-        # 2. Detect Bóng (Ball Model)
-        b_result = BALL_DETECTION_MODEL.infer(frame, confidence=0.25)[0] # Giảm conf chút cho bóng
-        ball_detections = sv.Detections.from_inference(b_result)
-        ball_detections = ball_detections[ball_detections.class_id == 0] # Chỉ lấy bóng
-        # Pad box bóng to ra chút để vẽ tam giác đẹp hơn
-        if len(ball_detections) > 0:
-            ball_detections.xyxy = sv.pad_boxes(xyxy=ball_detections.xyxy, px=10)
+                for i, (tid, cid) in enumerate(zip(tracked.tracker_id, tracked.class_id)):
+                    if cid == self.PLAYER_ID:
+                        if tid not in self.team_cache or should_reclassify:
+                            unknown_crops.append(sv.crop_image(frame, tracked.xyxy[i]))
+                            unknown_idxs.append(i)
 
-        # --- B. TRACKING & FILTERING ---
+                if unknown_crops:
+                    new_teams = self.team_classifier.predict(unknown_crops)
+                    for u_idx, nt_id in zip(unknown_idxs, new_teams):
+                        tid = tracked.tracker_id[u_idx]
+                        # Nếu đổi đội, xóa số áo cũ để cấp lại
+                        if self.team_cache.get(tid) is not None and self.team_cache.get(tid) != nt_id:
+                            self.kit_number_cache.pop(tid, None)
+                        self.team_cache[tid] = nt_id
 
-        # 1. Xử lý Players (Class 2)
-        players = all_detections[all_detections.class_id == 2]
-        players = players.with_nms(threshold=0.5, class_agnostic=True)
-        tracked_players = player_tracker.update(players) # -> ID 1-22
+                # C. Attributes Assignment
+                final_cids, final_labels, p_xy, p_team = [], [], [], []
+                for i, (tid, cid) in enumerate(zip(tracked.tracker_id, tracked.class_id)):
+                    if cid == self.PLAYER_ID:
+                        t_id = self.team_cache.get(tid, 0)
+                        k_num = self._assign_kit_number(tid, t_id, idx)
+                        final_cids.append(t_id)
+                        final_labels.append(f"#{k_num}")
+                        p_xy.append(tracked.get_anchors_coordinates(sv.Position.BOTTOM_CENTER)[i])
+                        p_team.append(t_id)
+                    else:
+                        final_cids.append(-1) # Đánh dấu GK
+                        final_labels.append("GK")
 
-        # 2. Xử lý Goalkeepers (Class 1)
-        gks = all_detections[all_detections.class_id == 1]
-        tracked_gks = gk_tracker.update_with_detections(gks)
-        # Ép ID về 0
-        if len(tracked_gks) > 0:
-            tracked_gks.tracker_id = np.zeros_like(tracked_gks.tracker_id)
+                tracked.class_id = np.array(final_cids)
 
-        # 3. Xử lý Referee (Class 3)
-        refs = all_detections[all_detections.class_id == 3]
-        # Không cần track ID, chỉ cần detections để vẽ box
+                # D. Resolve GK Team
+                gk_mask = (tracked.class_id == -1)
+                if np.any(gk_mask) and p_xy:
+                    p_xy, p_team = np.array(p_xy), np.array(p_team)
+                    c0 = p_xy[p_team == 0].mean(axis=0) if 0 in p_team else np.array([-9999, -9999])
+                    c1 = p_xy[p_team == 1].mean(axis=0) if 1 in p_team else np.array([9999, 9999])
+                    
+                    for g_idx in np.where(gk_mask)[0]:
+                        g_xy = tracked.get_anchors_coordinates(sv.Position.BOTTOM_CENTER)[g_idx]
+                        tracked.class_id[g_idx] = 0 if np.linalg.norm(g_xy-c0) < np.linalg.norm(g_xy-c1) else 1
 
-        # 4. Xử lý Bóng (Class 0 từ Model 2)
-        tracked_ball = ball_tracker.update_with_detections(ball_detections)
+                # E. Ball & Rendering
+                b_res = self.ball_model.infer(frame, confidence=0.25)[0]
+                ball_det = sv.Detections.from_inference(b_res)
+                ball_tracked = self.ball_tracker.update_with_detections(ball_det[ball_det.class_id == 0])
 
-        # --- C. DRAWING ---
-        annotated_frame = frame.copy()
+                # Vẽ
+                is_gk = np.array([lbl == "GK" for lbl in final_labels])
+                annotated = self.player_annotator.annotate(frame.copy(), tracked[~is_gk])
+                annotated = self.player_label_annotator.annotate(annotated, tracked[~is_gk], [l for l, g in zip(final_labels, is_gk) if not g])
+                annotated = self.gk_box_annotator.annotate(annotated, tracked[is_gk])
+                annotated = self.player_label_annotator.annotate(annotated, tracked[is_gk], ["GK"]*sum(is_gk))
+                if len(ball_tracked) > 0:
+                    annotated = self.ball_annotator.annotate(annotated, ball_tracked)
 
-        # Vẽ Players
-        labels_player = [f"#{tid}" for tid in tracked_players.tracker_id]
-        annotated_frame = ellipse_annotator.annotate(annotated_frame, tracked_players)
-        annotated_frame = label_annotator.annotate(annotated_frame, tracked_players, labels_player)
-
-        # Vẽ Goalkeepers
-        labels_gk = ["GK" for _ in tracked_gks.tracker_id]
-        annotated_frame = gk_box_annotator.annotate(annotated_frame, tracked_gks)
-        annotated_frame = gk_label_annotator.annotate(annotated_frame, tracked_gks, labels_gk)
-
-        # Vẽ Referee
-        annotated_frame = ref_box_annotator.annotate(annotated_frame, refs)
-
-        # Vẽ Bóng
-        annotated_frame = triangle_annotator.annotate(annotated_frame, tracked_ball)
-
-        # Lưu frame
-        sink.write_frame(annotated_frame)
-
-print("Hoàn tất! Video đã được lưu.")
+                sink.write_frame(annotated)

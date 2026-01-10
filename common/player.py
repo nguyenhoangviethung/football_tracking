@@ -103,7 +103,7 @@ from scipy.spatial.distance import cdist
 #             self.active_real_ids.add(new_real_id)
 
 class SmartPlayerTracker:
-    def __init__(self, max_id=20, max_distance=150):
+    def __init__(self, max_id=10, max_distance=150):
         self.tracker = sv.ByteTrack(
             track_activation_threshold=0.25,
             lost_track_buffer=60, 

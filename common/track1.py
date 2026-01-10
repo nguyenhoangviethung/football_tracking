@@ -129,7 +129,7 @@ class FootballTracker:
                         tracked.class_id[g_idx] = 0 if np.linalg.norm(g_xy-c0) < np.linalg.norm(g_xy-c1) else 1
 
                 # --- E. BALL TRACKING (NÂNG CẤP) ---
-                b_res = self.ball_model.infer(frame, confidence=0.25)[0]
+                b_res = self.ball_model.infer(frame, confidence=0.09)[0]
                 ball_det = sv.Detections.from_inference(b_res)
                 # Lọc class Ball (0)
                 ball_det = ball_det[ball_det.class_id == self.BALL_ID]

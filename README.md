@@ -1,9 +1,3 @@
-Dưới đây là mẫu **README.md** chuyên nghiệp, được viết bằng tiếng Anh (chuẩn cho GitHub và CV quốc tế), dựa trên toàn bộ thông tin kỹ thuật trong báo cáo của bạn.
-
-Bạn hãy copy nội dung này vào file `README.md` trong thư mục code của bạn.
-
----
-
 # Football Analysis & Tracking System (AI-Powered)
 
 ## 📖 Introduction
